@@ -10,6 +10,14 @@
 #define TdsSensorPin A3
 #define TurbiditySensorPin A5
 #define OneWireBus 7
+#define enA 3
+#define in1 6
+#define in2 5 
+#define enB 10
+#define in3 7
+#define in4 2 
+
+
 
 GravityTDS gravityTds;
 OneWire oneWire(OneWireBus);
@@ -18,10 +26,219 @@ DallasTemperature sensors(&oneWire);
 
 RF24 radio(9, 8);  // CE, CSN  - create an RF24 object
 const uint64_t esp_addr = 0xE8E8F0F0E1LL; //address to communicate with esp32
-float ackData[3] = {0,0,0};
+
 int xValue;
 int yValue;
 
+float ackData[3] = {0,0,0};
+int measurementSendDelay = 3000;
+unsigned long timer;
+
+
+void setup()
+{
+  Serial.begin(9600);
+  Serial.println("Mobile Water Station Controller - initializing ... ");
+
+  // motors
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(enB, OUTPUT);
+  pinMode(in3, OUTPUT);
+  pinMode(in4, OUTPUT);
+  // turn off motors
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  
+  // for DS18B20 - temperature sensor
+  sensors.begin();
+  // for SEN0244 - TDS sensor
+  gravityTds.setPin(TdsSensorPin);
+  gravityTds.setAref(5.0);
+  gravityTds.setAdcRange(1024);
+  gravityTds.begin();
+   Serial.println("[*]Water sensors: up and running");
+
+  radio.begin();
+  Serial.println("[*]nRF24L01: up and running");
+  radio.setDataRate(RF24_250KBPS);
+  radio.openReadingPipe(1, esp_addr);
+  radio.enableAckPayload();
+  Serial.println("[*]ACK Payload: enabled");
+  radio.startListening();
+  Serial.print("[*]Opened reading pipe on address: ");
+  //Serial.println(esp_addr,HEX);
+  radio.writeAckPayload(1,&ackData,sizeof(ackData));
+
+  timer = millis();
+}
+
+void loop()
+{
+
+  if (radio.available())
+  {
+ 
+    int dataReceived[4]; 
+    radio.read(&dataReceived, sizeof(dataReceived));
+    xValue = dataReceived[0];
+    yValue = dataReceived[2];
+    
+//    Serial.print("Received xValue: ");
+//    Serial.print(xValue);
+//    Serial.print(" Received yValue: ");
+//    Serial.println(yValue);
+    // engine output
+    controlMotors(xValue,yValue);
+    
+    // get measurements after specified time
+    if(millis()-timer >= measurementSendDelay){
+        sendMeasurements();
+        timer = millis();  
+      }
+  }
+
+}
+
+// Engine functions - controlling the boat 
+
+// xValue - left right movement
+// yValue - forward backward movement
+void controlMotors(int xValue, int yValue){
+    int speedMotorLeft; // A - right motor
+    int speedMotorRight;// B - left motor
+
+    // MOTOR LOGIC
+    // left and right are from the perspective of the back of the boat
+    // stationary position (joystick in the center)
+    if(xValue <= 1850 && xValue >= 1650 && yValue <= 1850 && yValue >= 1650){
+        // left motor stationary
+        digitalWrite(in1, LOW);
+        digitalWrite(in2, LOW);
+        // right motor stationary
+        digitalWrite(in3, LOW);
+        digitalWrite(in4, LOW);;
+        speedMotorLeft = 0;
+        speedMotorRight = 0;  
+        Serial.println("In stationary");   
+      }
+
+      // forward
+      else if(xValue <= 1850 && xValue >= 1650 && yValue <= 4095 && yValue >= 1850){
+        // left motor: power
+        digitalWrite(in1, HIGH);
+        digitalWrite(in2, LOW);
+        // right motor: power
+        digitalWrite(in3, HIGH);
+        digitalWrite(in4, LOW);;
+        speedMotorLeft = map(yValue,1850,4095,0,255);
+        speedMotorRight = map(yValue,1850,4095,0,255);  
+        Serial.println("Forward");   
+      }
+
+      // backward
+      else if(xValue <= 1850 && xValue >= 1650 && yValue <= 1650 && yValue >= 0){
+        // left motor: power
+        digitalWrite(in1, LOW);
+        digitalWrite(in2, HIGH);
+        // right motor: power 
+        digitalWrite(in3, LOW);
+        digitalWrite(in4, HIGH);;
+        speedMotorLeft = map(yValue,1650,0,0,255);
+        speedMotorRight = map(yValue,1650,0,0,255);  
+        Serial.println("Backward");   
+      }
+
+      // spin clockwise
+       else if(xValue <= 4095 && xValue >= 1850 && yValue <= 1850 && yValue >= 1650){
+        // left motor: power
+        digitalWrite(in1, HIGH);
+        digitalWrite(in2, LOW);
+        // right motor: stationary
+        digitalWrite(in3, HIGH);
+        digitalWrite(in4, LOW);;
+        speedMotorLeft = map(xValue,1850,4095,0,255);
+        speedMotorRight = 0 ;
+        Serial.println("Clockwise spin");   
+      }
+
+      // spin anticlockwise
+       else if(xValue <= 1650 && xValue >= 0 && yValue <= 1850 && yValue >= 1650){
+        // left motor: stationary
+        digitalWrite(in1, HIGH);
+        digitalWrite(in2, LOW);
+        // right motor: power
+        digitalWrite(in3, HIGH);
+        digitalWrite(in4, LOW);;
+        speedMotorLeft = 0;
+        speedMotorRight = map(xValue,1650,0,0,255);  
+        Serial.println("Anticlockwise spin");   
+      }
+
+      // 1 quadrant - moving forward left
+      else if (xValue <= 1650 && xValue >= 0 && yValue <= 4095 && yValue >= 1850){
+        // left motor: less xValue -> less power -> initiates left turn
+        digitalWrite(in1, HIGH);
+        digitalWrite(in2, LOW);
+        speedMotorLeft = map(xValue,0,1650,0,255);
+        // right motor: more yValue -> more power -> controls angle of the left turn
+        digitalWrite(in3, HIGH);
+        digitalWrite(in4, LOW);
+        speedMotorRight =  map(yValue,1850,4095,0,255);
+        Serial.println("Forward (left)");
+        }
+
+      // 2 quadrant - moving forward right
+      else if (xValue <= 4095 && xValue >= 1850 && yValue <= 4096 && yValue >= 1850){
+        // left motor: more yValue -> more power -> controls angle of the right turn
+        digitalWrite(in1, HIGH);
+        digitalWrite(in2, LOW);
+        speedMotorLeft = map(yValue,1850,4095,0,255);
+        // right motor: more xValue -> less power -> initiates right turn
+        digitalWrite(in3, HIGH);
+        digitalWrite(in4, LOW);
+        speedMotorRight =  map(xValue,4095,1850,0,255);
+        Serial.println("Forward (right)");
+        }
+      // 3 quadrant - moving backwards left
+      else if (xValue <= 1650 && xValue >= 0 && yValue <= 1650 && yValue >= 0){
+        // left motor: less xValue -> less power -> initiates left turn
+        digitalWrite(in1, LOW);
+        digitalWrite(in2, HIGH);
+        speedMotorLeft = map(xValue,0,1650,0,255);
+        // right motor: less yValue -> more power -> controls angle of the left turn
+        digitalWrite(in3, LOW);
+        digitalWrite(in4, HIGH);
+        speedMotorRight =  map(yValue,1650,0,0,255);
+        Serial.println("Backwards (left)");
+        }
+
+        // 4 quadrant - moving backwards right
+      else if (xValue <= 4095 && xValue >= 1850 && yValue <= 1650 && yValue >= 0){
+        // left motor: more yValue -> more pwoer -> controls angle of the rigth turn
+        digitalWrite(in1, LOW);
+        digitalWrite(in2, HIGH);
+        speedMotorLeft = map(yValue,1650,0,0,255);
+        // right motor: more xValue -> less power -> initiaties right turn
+        digitalWrite(in3, LOW);
+        digitalWrite(in4, HIGH);
+        speedMotorRight =  map(xValue,4095,1850,0,255);
+        Serial.println("Backwards (right)");
+        }
+
+//        Serial.print("Left engine output:");
+//        Serial.print(speedMotorLeft);
+//        Serial.print("  Right engine output:");
+//        Serial.println(speedMotorRight);
+        
+        analogWrite(enA, speedMotorRight);
+        analogWrite(enB, speedMotorLeft);
+      
+  } 
+
+
+// Measurements Functions
 float roundToDp( float in_value, int decimal_place )
 {
   float multiplier = powf( 10.0f, decimal_place );
@@ -68,59 +285,16 @@ float getTdsValueWrapper(float temperature) {
   return tdsValue;
 }
 
-void setup()
-{
- 
-  Serial.begin(9600);
-
-  // for DS18B20 - temperature sensor
-  sensors.begin();
-  // for SEN0244 - TDS sensor
-  gravityTds.setPin(TdsSensorPin);
-  gravityTds.setAref(5.0);
-  gravityTds.setAdcRange(1024);
-  gravityTds.begin();
-
-  radio.begin();
-  radio.setDataRate(RF24_250KBPS);
-  radio.openReadingPipe(1, esp_addr);
-  radio.enableAckPayload();
-  radio.startListening();
-  radio.writeAckPayload(1,&ackData,sizeof(ackData));
-}
-
-void loop()
-{
-
-  if (radio.available())
-  {
- 
-    int dataReceived[4]; 
-    radio.read(&dataReceived, sizeof(dataReceived));
-    xValue = dataReceived[0];
-    yValue = dataReceived[2];
-    
-    
-    Serial.print("Received xValue: ");
-    Serial.print(xValue);
-    Serial.print(" Received yValue: ");
-    Serial.println(yValue);
-    // engine output
-    // get measurements
-    sendMeasurements();
-    delay(50);
-
-  }
-
-}
-
 void sendMeasurements(){
-   float measurement_TURBIDITY = getTurbidityValue(voltage_TURBIDITY);
-   delay(1000);
-   float measurement_TEMPERATURE = getTemperatureWrapper();
-   delay(1000);
-   float measurement_TDS = getTdsValueWrapper(measurement_TEMPERATURE);
-
+   //float measurement_TURBIDITY = getTurbidityValue(voltage_TURBIDITY);
+   float measurement_TURBIDITY = 200.24;
+   //delay(1000);
+   //float measurement_TEMPERATURE = getTemperatureWrapper();
+   float measurement_TEMPERATURE = 18.6;
+   //delay(1000);
+   //float measurement_TDS = getTdsValueWrapper(measurement_TEMPERATURE);
+   float measurement_TDS = 157.1;
+   
    ackData[0] = measurement_TURBIDITY;
    ackData[1] = measurement_TEMPERATURE;
    ackData[2] = measurement_TDS;
