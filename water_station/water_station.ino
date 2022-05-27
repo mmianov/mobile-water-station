@@ -7,9 +7,9 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define TdsSensorPin A3
-#define TurbiditySensorPin A5
-#define OneWireBus 7
+#define TdsSensorPin A4
+#define TurbiditySensorPin A3
+#define OneWireBus 4
 #define enA 3
 #define in1 6
 #define in2 5 
@@ -33,6 +33,7 @@ int yValue;
 float ackData[3] = {0,0,0};
 int measurementSendDelay = 3000;
 unsigned long timer;
+int state;
 
 
 void setup()
@@ -67,8 +68,6 @@ void setup()
   radio.enableAckPayload();
   Serial.println("[*]ACK Payload: enabled");
   radio.startListening();
-  Serial.print("[*]Opened reading pipe on address: ");
-  //Serial.println(esp_addr,HEX);
   radio.writeAckPayload(1,&ackData,sizeof(ackData));
 
   timer = millis();
@@ -90,10 +89,10 @@ void loop()
 //    Serial.print(" Received yValue: ");
 //    Serial.println(yValue);
     // engine output
-    controlMotors(xValue,yValue);
+    state = controlMotors(xValue,yValue);
     
-    // get measurements after specified time
-    if(millis()-timer >= measurementSendDelay){
+    // get measurements after specified time and if the boat does not move
+    if(millis()-timer >= measurementSendDelay && state == 0){
         sendMeasurements();
         timer = millis();  
       }
@@ -105,7 +104,7 @@ void loop()
 
 // xValue - left right movement
 // yValue - forward backward movement
-void controlMotors(int xValue, int yValue){
+int controlMotors(int xValue, int yValue){
     int speedMotorLeft; // A - right motor
     int speedMotorRight;// B - left motor
 
@@ -121,7 +120,8 @@ void controlMotors(int xValue, int yValue){
         digitalWrite(in4, LOW);;
         speedMotorLeft = 0;
         speedMotorRight = 0;  
-        Serial.println("In stationary");   
+        //Serial.println("In stationary");  
+        return 0; 
       }
 
       // forward
@@ -135,6 +135,7 @@ void controlMotors(int xValue, int yValue){
         speedMotorLeft = map(yValue,1850,4095,0,255);
         speedMotorRight = map(yValue,1850,4095,0,255);  
         Serial.println("Forward");   
+        return 1;
       }
 
       // backward
@@ -147,7 +148,8 @@ void controlMotors(int xValue, int yValue){
         digitalWrite(in4, HIGH);;
         speedMotorLeft = map(yValue,1650,0,0,255);
         speedMotorRight = map(yValue,1650,0,0,255);  
-        Serial.println("Backward");   
+        Serial.println("Backward"); 
+        return 2;  
       }
 
       // spin clockwise
@@ -161,6 +163,7 @@ void controlMotors(int xValue, int yValue){
         speedMotorLeft = map(xValue,1850,4095,0,255);
         speedMotorRight = 0 ;
         Serial.println("Clockwise spin");   
+        return 3;
       }
 
       // spin anticlockwise
@@ -174,6 +177,7 @@ void controlMotors(int xValue, int yValue){
         speedMotorLeft = 0;
         speedMotorRight = map(xValue,1650,0,0,255);  
         Serial.println("Anticlockwise spin");   
+        return 4;
       }
 
       // 1 quadrant - moving forward left
@@ -187,6 +191,7 @@ void controlMotors(int xValue, int yValue){
         digitalWrite(in4, LOW);
         speedMotorRight =  map(yValue,1850,4095,0,255);
         Serial.println("Forward (left)");
+        return 5;
         }
 
       // 2 quadrant - moving forward right
@@ -200,6 +205,7 @@ void controlMotors(int xValue, int yValue){
         digitalWrite(in4, LOW);
         speedMotorRight =  map(xValue,4095,1850,0,255);
         Serial.println("Forward (right)");
+        return 6;
         }
       // 3 quadrant - moving backwards left
       else if (xValue <= 1650 && xValue >= 0 && yValue <= 1650 && yValue >= 0){
@@ -212,6 +218,7 @@ void controlMotors(int xValue, int yValue){
         digitalWrite(in4, HIGH);
         speedMotorRight =  map(yValue,1650,0,0,255);
         Serial.println("Backwards (left)");
+        return 7;
         }
 
         // 4 quadrant - moving backwards right
@@ -225,13 +232,9 @@ void controlMotors(int xValue, int yValue){
         digitalWrite(in4, HIGH);
         speedMotorRight =  map(xValue,4095,1850,0,255);
         Serial.println("Backwards (right)");
+        return 8;
         }
 
-//        Serial.print("Left engine output:");
-//        Serial.print(speedMotorLeft);
-//        Serial.print("  Right engine output:");
-//        Serial.println(speedMotorRight);
-        
         analogWrite(enA, speedMotorRight);
         analogWrite(enB, speedMotorLeft);
       
@@ -286,14 +289,16 @@ float getTdsValueWrapper(float temperature) {
 }
 
 void sendMeasurements(){
-   //float measurement_TURBIDITY = getTurbidityValue(voltage_TURBIDITY);
-   float measurement_TURBIDITY = 200.24;
-   //delay(1000);
-   //float measurement_TEMPERATURE = getTemperatureWrapper();
-   float measurement_TEMPERATURE = 18.6;
-   //delay(1000);
-   //float measurement_TDS = getTdsValueWrapper(measurement_TEMPERATURE);
-   float measurement_TDS = 157.1;
+   float voltage_TURBIDITY = getAvgVoltage(TurbiditySensorPin);
+   float measurement_TURBIDITY = getTurbidityValue(voltage_TURBIDITY);
+   float measurement_TEMPERATURE = getTemperatureWrapper();
+   float measurement_TDS = getTdsValueWrapper(measurement_TEMPERATURE);
+   Serial.print("Turbidity: ");
+   Serial.print(measurement_TURBIDITY);
+   Serial.print(" Temperature: ");
+   Serial.print(measurement_TEMPERATURE);
+   Serial.print(" TDS: ");
+   Serial.println(measurement_TDS);
    
    ackData[0] = measurement_TURBIDITY;
    ackData[1] = measurement_TEMPERATURE;
