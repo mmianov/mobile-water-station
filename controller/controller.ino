@@ -12,7 +12,7 @@
 #define AWS_IOT_SUBSCRIBE_TOPIC "esp32/sub"
 
 #define joyX 32 
-#define joyY 34
+#define joyY 33
 
 RF24 radio(12, 14, 26, 25, 27); //create an RF24 object
 const uint64_t boat_addr = 0xE8E8F0F0E1LL; //address to commmunicate with Arduino nrf24
